@@ -75,22 +75,6 @@
         }
         .gif-card a:hover { background: #b55a0f; }
         .status { text-align: center; padding: 20px; color: #666; }
-        .progress { 
-            width: 100%; 
-            height: 4px; 
-            background: #e0e0e0; 
-            border-radius: 2px; 
-            margin-top: 10px;
-            display: none;
-        }
-        .progress.show { display: block; }
-        .progress-bar {
-            height: 100%;
-            background: #D26C13;
-            border-radius: 2px;
-            width: 0%;
-            transition: width 0.2s;
-        }
         canvas { display: none; }
     </style>
 </head>
@@ -112,7 +96,6 @@
     </div>
     
     <div id="status" class="status"></div>
-    <div id="progress" class="progress"><div id="progressBar" class="progress-bar"></div></div>
     
     <div id="output" class="output">
         <div class="gif-card">
@@ -129,11 +112,216 @@
     
     <canvas id="canvas" width="1116" height="264"></canvas>
     
-    <!-- GIF.js from CDN -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    
     <script>
-    // Configuration
+    class GIFEncoder {
+        constructor(width, height, quality = 10) {
+            this.width = width;
+            this.height = height;
+            this.quality = quality;
+            this.frames = [];
+            this.delays = [];
+        }
+        
+        addFrame(ctx, delay = 100) {
+            const imageData = ctx.getImageData(0, 0, this.width, this.height);
+            this.frames.push(imageData.data);
+            this.delays.push(delay);
+        }
+        
+        encode() {
+            const width = this.width;
+            const height = this.height;
+            const palette = this.buildPalette(this.frames[0]);
+            const colorTab = palette.colors;
+            const colorMap = palette.map;
+            const stream = [];
+            
+            this.writeString(stream, 'GIF89a');
+            this.writeShort(stream, width);
+            this.writeShort(stream, height);
+            stream.push(0xF7);
+            stream.push(0);
+            stream.push(0);
+            
+            for (let i = 0; i < 256; i++) {
+                if (i < colorTab.length / 3) {
+                    stream.push(colorTab[i * 3]);
+                    stream.push(colorTab[i * 3 + 1]);
+                    stream.push(colorTab[i * 3 + 2]);
+                } else {
+                    stream.push(0, 0, 0);
+                }
+            }
+            
+            stream.push(0x21, 0xFF, 0x0B);
+            this.writeString(stream, 'NETSCAPE2.0');
+            stream.push(0x03, 0x01, 0x00, 0x00, 0x00);
+            
+            for (let i = 0; i < this.frames.length; i++) {
+                const frameData = this.frames[i];
+                const delay = Math.round(this.delays[i] / 10);
+                
+                stream.push(0x21, 0xF9, 0x04, 0x00);
+                this.writeShort(stream, delay);
+                stream.push(0x00, 0x00);
+                
+                stream.push(0x2C);
+                this.writeShort(stream, 0);
+                this.writeShort(stream, 0);
+                this.writeShort(stream, width);
+                this.writeShort(stream, height);
+                stream.push(0x00);
+                
+                const indexedPixels = this.quantize(frameData, colorMap);
+                const lzw = this.lzwEncode(indexedPixels);
+                stream.push(8);
+                
+                let pos = 0;
+                while (pos < lzw.length) {
+                    const size = Math.min(255, lzw.length - pos);
+                    stream.push(size);
+                    for (let j = 0; j < size; j++) {
+                        stream.push(lzw[pos++]);
+                    }
+                }
+                stream.push(0x00);
+            }
+            
+            stream.push(0x3B);
+            return new Uint8Array(stream);
+        }
+        
+        buildPalette(pixels) {
+            const colorCounts = new Map();
+            const numPixels = pixels.length / 4;
+            
+            for (let i = 0; i < numPixels; i++) {
+                const r = pixels[i * 4] & 0xF8;
+                const g = pixels[i * 4 + 1] & 0xF8;
+                const b = pixels[i * 4 + 2] & 0xF8;
+                const key = (r << 16) | (g << 8) | b;
+                colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
+            }
+            
+            const sorted = [...colorCounts.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 256);
+            
+            const colors = [];
+            const map = new Map();
+            
+            for (let i = 0; i < sorted.length; i++) {
+                const key = sorted[i][0];
+                const r = (key >> 16) & 0xFF;
+                const g = (key >> 8) & 0xFF;
+                const b = key & 0xFF;
+                colors.push(r, g, b);
+                map.set(key, i);
+            }
+            
+            while (colors.length < 768) {
+                colors.push(0, 0, 0);
+            }
+            
+            return { colors, map };
+        }
+        
+        quantize(pixels, colorMap) {
+            const numPixels = pixels.length / 4;
+            const indexed = new Uint8Array(numPixels);
+            
+            for (let i = 0; i < numPixels; i++) {
+                const r = pixels[i * 4] & 0xF8;
+                const g = pixels[i * 4 + 1] & 0xF8;
+                const b = pixels[i * 4 + 2] & 0xF8;
+                const key = (r << 16) | (g << 8) | b;
+                indexed[i] = colorMap.get(key) || 0;
+            }
+            
+            return indexed;
+        }
+        
+        lzwEncode(pixels) {
+            const minCodeSize = 8;
+            const clearCode = 1 << minCodeSize;
+            const eoiCode = clearCode + 1;
+            let codeSize = minCodeSize + 1;
+            let nextCode = eoiCode + 1;
+            
+            const output = [];
+            let bitBuffer = 0;
+            let bitCount = 0;
+            
+            const emit = (code) => {
+                bitBuffer |= code << bitCount;
+                bitCount += codeSize;
+                while (bitCount >= 8) {
+                    output.push(bitBuffer & 0xFF);
+                    bitBuffer >>= 8;
+                    bitCount -= 8;
+                }
+            };
+            
+            let dict = new Map();
+            const resetDict = () => {
+                dict = new Map();
+                for (let i = 0; i < clearCode; i++) {
+                    dict.set(String.fromCharCode(i), i);
+                }
+                nextCode = eoiCode + 1;
+                codeSize = minCodeSize + 1;
+            };
+            
+            resetDict();
+            emit(clearCode);
+            
+            let current = String.fromCharCode(pixels[0]);
+            
+            for (let i = 1; i < pixels.length; i++) {
+                const next = String.fromCharCode(pixels[i]);
+                const combined = current + next;
+                
+                if (dict.has(combined)) {
+                    current = combined;
+                } else {
+                    emit(dict.get(current));
+                    
+                    if (nextCode < 4096) {
+                        dict.set(combined, nextCode++);
+                        if (nextCode > (1 << codeSize) && codeSize < 12) {
+                            codeSize++;
+                        }
+                    } else {
+                        emit(clearCode);
+                        resetDict();
+                    }
+                    
+                    current = next;
+                }
+            }
+            
+            emit(dict.get(current));
+            emit(eoiCode);
+            
+            if (bitCount > 0) {
+                output.push(bitBuffer & 0xFF);
+            }
+            
+            return output;
+        }
+        
+        writeString(stream, str) {
+            for (let i = 0; i < str.length; i++) {
+                stream.push(str.charCodeAt(i));
+            }
+        }
+        
+        writeShort(stream, val) {
+            stream.push(val & 0xFF);
+            stream.push((val >> 8) & 0xFF);
+        }
+    }
+    
     const WIDTH = 1116;
     const HEIGHT = 264;
     const COLOR = '#D26C13';
@@ -163,33 +351,24 @@
         return result.trim();
     }
     
-    function updateProgress(pct) {
-        document.getElementById('progressBar').style.width = pct + '%';
-    }
-    
     async function generate() {
         const input = document.getElementById('numberInput').value.trim();
         if (!input) return;
         
         const btn = document.getElementById('generateBtn');
         const status = document.getElementById('status');
-        const progress = document.getElementById('progress');
         const output = document.getElementById('output');
         
         btn.disabled = true;
         output.classList.remove('show');
-        progress.classList.add('show');
-        updateProgress(0);
-        status.textContent = 'Generiere DE Version...';
+        status.textContent = 'Generiere GIFs...';
+        
+        await new Promise(r => setTimeout(r, 50));
         
         try {
-            const deGif = await createGif(input, (p) => updateProgress(p * 45));
-            updateProgress(50);
-            
-            status.textContent = 'Generiere EN Version...';
+            const deGif = createGif(input);
             const enText = convertToEnglish(input);
-            const enGif = await createGif(enText, (p) => updateProgress(50 + p * 45));
-            updateProgress(100);
+            const enGif = createGif(enText);
             
             document.getElementById('gifDE').src = deGif;
             document.getElementById('downloadDE').href = deGif;
@@ -200,77 +379,59 @@
             document.getElementById('downloadEN').download = `number_${input.replace(/[^a-zA-Z0-9]/g, '_')}_EN.gif`;
             
             status.textContent = '';
-            progress.classList.remove('show');
             output.classList.add('show');
             
         } catch (err) {
             status.textContent = 'Fehler: ' + err.message;
-            progress.classList.remove('show');
             console.error(err);
         }
         
         btn.disabled = false;
     }
     
-    function createGif(text, onProgress) {
-        return new Promise((resolve, reject) => {
-            const gif = new GIF({
-                workers: 2,
-                quality: 1,
-                width: WIDTH,
-                height: HEIGHT,
-                workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
-            });
+    function createGif(text) {
+        const encoder = new GIFEncoder(WIDTH, HEIGHT);
+        
+        ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
+        const textMetrics = ctx.measureText(text);
+        const textWidth = textMetrics.width;
+        const textX = (WIDTH - textWidth) / 2;
+        const textY = HEIGHT / 2 + 30;
+        
+        const lineWidth = Math.floor(WIDTH * LINE_WIDTH_RATIO);
+        const lineStartX = Math.floor((WIDTH - lineWidth) / 2);
+        const lineY = Math.floor(textY + 35);
+        
+        for (let frame = 0; frame < SWIPE_FRAMES; frame++) {
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
             
-            // Measure text
+            ctx.fillStyle = COLOR;
             ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
-            const textMetrics = ctx.measureText(text);
-            const textWidth = textMetrics.width;
-            const textX = (WIDTH - textWidth) / 2;
-            const textY = HEIGHT / 2 + 30;
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, textX, textY);
             
-            const lineWidth = Math.floor(WIDTH * LINE_WIDTH_RATIO);
-            const lineStartX = Math.floor((WIDTH - lineWidth) / 2);
-            const lineY = Math.floor(textY + 35);
+            const progress = frame / (SWIPE_FRAMES - 1);
+            const gradient = ctx.createLinearGradient(lineStartX, 0, lineStartX + lineWidth, 0);
             
-            // Generate frames
-            for (let frame = 0; frame < SWIPE_FRAMES; frame++) {
-                ctx.fillStyle = 'white';
-                ctx.fillRect(0, 0, WIDTH, HEIGHT);
-                
-                ctx.fillStyle = COLOR;
-                ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(text, textX, textY);
-                
-                // Draw gradient line
-                const progress = frame / (SWIPE_FRAMES - 1);
-                const gradient = ctx.createLinearGradient(lineStartX, 0, lineStartX + lineWidth, 0);
-                
-                const swipePos = progress;
-                const spread = 0.15;
-                
-                gradient.addColorStop(0, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-                gradient.addColorStop(Math.max(0, swipePos - spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-                gradient.addColorStop(Math.min(1, swipePos), `rgb(${COLOR_LIGHT[0]},${COLOR_LIGHT[1]},${COLOR_LIGHT[2]})`);
-                gradient.addColorStop(Math.min(1, swipePos + spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-                gradient.addColorStop(1, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-                
-                ctx.fillStyle = gradient;
-                ctx.fillRect(lineStartX, lineY - LINE_THICKNESS / 2, lineWidth, LINE_THICKNESS);
-                
-                gif.addFrame(ctx, {copy: true, delay: FRAME_DELAY});
-            }
+            const swipePos = progress;
+            const spread = 0.15;
             
-            gif.on('progress', (p) => onProgress && onProgress(p));
+            gradient.addColorStop(0, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(Math.max(0, swipePos - spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(Math.min(1, swipePos), `rgb(${COLOR_LIGHT[0]},${COLOR_LIGHT[1]},${COLOR_LIGHT[2]})`);
+            gradient.addColorStop(Math.min(1, swipePos + spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(1, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
             
-            gif.on('finished', (blob) => {
-                resolve(URL.createObjectURL(blob));
-            });
+            ctx.fillStyle = gradient;
+            ctx.fillRect(lineStartX, lineY - LINE_THICKNESS / 2, lineWidth, LINE_THICKNESS);
             
-            gif.on('error', reject);
-            gif.render();
-        });
+            encoder.addFrame(ctx, FRAME_DELAY);
+        }
+        
+        const gifData = encoder.encode();
+        const blob = new Blob([gifData], { type: 'image/gif' });
+        return URL.createObjectURL(blob);
     }
     </script>
 </body>
