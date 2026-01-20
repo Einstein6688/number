@@ -114,10 +114,9 @@
     
     <script>
     class GIFEncoder {
-        constructor(width, height, quality = 10) {
+        constructor(width, height) {
             this.width = width;
             this.height = height;
-            this.quality = quality;
             this.frames = [];
             this.delays = [];
         }
@@ -139,15 +138,11 @@
             this.writeString(stream, 'GIF89a');
             this.writeShort(stream, width);
             this.writeShort(stream, height);
-            stream.push(0xF7);
-            stream.push(0);
-            stream.push(0);
+            stream.push(0xF7, 0, 0);
             
             for (let i = 0; i < 256; i++) {
                 if (i < colorTab.length / 3) {
-                    stream.push(colorTab[i * 3]);
-                    stream.push(colorTab[i * 3 + 1]);
-                    stream.push(colorTab[i * 3 + 2]);
+                    stream.push(colorTab[i * 3], colorTab[i * 3 + 1], colorTab[i * 3 + 2]);
                 } else {
                     stream.push(0, 0, 0);
                 }
@@ -180,9 +175,7 @@
                 while (pos < lzw.length) {
                     const size = Math.min(255, lzw.length - pos);
                     stream.push(size);
-                    for (let j = 0; j < size; j++) {
-                        stream.push(lzw[pos++]);
-                    }
+                    for (let j = 0; j < size; j++) stream.push(lzw[pos++]);
                 }
                 stream.push(0x00);
             }
@@ -194,7 +187,6 @@
         buildPalette(pixels) {
             const colorCounts = new Map();
             const numPixels = pixels.length / 4;
-            
             for (let i = 0; i < numPixels; i++) {
                 const r = pixels[i * 4] & 0xF8;
                 const g = pixels[i * 4 + 1] & 0xF8;
@@ -202,210 +194,129 @@
                 const key = (r << 16) | (g << 8) | b;
                 colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
             }
-            
-            const sorted = [...colorCounts.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 256);
-            
-            const colors = [];
-            const map = new Map();
-            
+            const sorted = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 256);
+            const colors = [], map = new Map();
             for (let i = 0; i < sorted.length; i++) {
                 const key = sorted[i][0];
-                const r = (key >> 16) & 0xFF;
-                const g = (key >> 8) & 0xFF;
-                const b = key & 0xFF;
-                colors.push(r, g, b);
+                colors.push((key >> 16) & 0xFF, (key >> 8) & 0xFF, key & 0xFF);
                 map.set(key, i);
             }
-            
-            while (colors.length < 768) {
-                colors.push(0, 0, 0);
-            }
-            
+            while (colors.length < 768) colors.push(0, 0, 0);
             return { colors, map };
         }
         
         quantize(pixels, colorMap) {
             const numPixels = pixels.length / 4;
             const indexed = new Uint8Array(numPixels);
-            
             for (let i = 0; i < numPixels; i++) {
                 const r = pixels[i * 4] & 0xF8;
                 const g = pixels[i * 4 + 1] & 0xF8;
                 const b = pixels[i * 4 + 2] & 0xF8;
-                const key = (r << 16) | (g << 8) | b;
-                indexed[i] = colorMap.get(key) || 0;
+                indexed[i] = colorMap.get((r << 16) | (g << 8) | b) || 0;
             }
-            
             return indexed;
         }
         
         lzwEncode(pixels) {
-            const minCodeSize = 8;
-            const clearCode = 1 << minCodeSize;
-            const eoiCode = clearCode + 1;
-            let codeSize = minCodeSize + 1;
-            let nextCode = eoiCode + 1;
-            
+            const clearCode = 256, eoiCode = 257;
+            let codeSize = 9, nextCode = 258;
             const output = [];
-            let bitBuffer = 0;
-            let bitCount = 0;
-            
+            let bitBuffer = 0, bitCount = 0;
             const emit = (code) => {
                 bitBuffer |= code << bitCount;
                 bitCount += codeSize;
-                while (bitCount >= 8) {
-                    output.push(bitBuffer & 0xFF);
-                    bitBuffer >>= 8;
-                    bitCount -= 8;
-                }
+                while (bitCount >= 8) { output.push(bitBuffer & 0xFF); bitBuffer >>= 8; bitCount -= 8; }
             };
-            
             let dict = new Map();
             const resetDict = () => {
                 dict = new Map();
-                for (let i = 0; i < clearCode; i++) {
-                    dict.set(String.fromCharCode(i), i);
-                }
-                nextCode = eoiCode + 1;
-                codeSize = minCodeSize + 1;
+                for (let i = 0; i < 256; i++) dict.set(String.fromCharCode(i), i);
+                nextCode = 258; codeSize = 9;
             };
-            
             resetDict();
             emit(clearCode);
-            
             let current = String.fromCharCode(pixels[0]);
-            
             for (let i = 1; i < pixels.length; i++) {
                 const next = String.fromCharCode(pixels[i]);
                 const combined = current + next;
-                
-                if (dict.has(combined)) {
-                    current = combined;
-                } else {
+                if (dict.has(combined)) { current = combined; }
+                else {
                     emit(dict.get(current));
-                    
                     if (nextCode < 4096) {
                         dict.set(combined, nextCode++);
-                        if (nextCode > (1 << codeSize) && codeSize < 12) {
-                            codeSize++;
-                        }
-                    } else {
-                        emit(clearCode);
-                        resetDict();
-                    }
-                    
+                        if (nextCode > (1 << codeSize) && codeSize < 12) codeSize++;
+                    } else { emit(clearCode); resetDict(); }
                     current = next;
                 }
             }
-            
             emit(dict.get(current));
             emit(eoiCode);
-            
-            if (bitCount > 0) {
-                output.push(bitBuffer & 0xFF);
-            }
-            
+            if (bitCount > 0) output.push(bitBuffer & 0xFF);
             return output;
         }
         
-        writeString(stream, str) {
-            for (let i = 0; i < str.length; i++) {
-                stream.push(str.charCodeAt(i));
-            }
-        }
-        
-        writeShort(stream, val) {
-            stream.push(val & 0xFF);
-            stream.push((val >> 8) & 0xFF);
-        }
+        writeString(stream, str) { for (let i = 0; i < str.length; i++) stream.push(str.charCodeAt(i)); }
+        writeShort(stream, val) { stream.push(val & 0xFF, (val >> 8) & 0xFF); }
     }
     
-    const WIDTH = 1116;
-    const HEIGHT = 264;
+    const WIDTH = 1116, HEIGHT = 264;
     const COLOR = '#D26C13';
     const COLOR_DARK = [210, 108, 19];
-    const COLOR_LIGHT = [230, 160, 100];
-    const LINE_THICKNESS = 6;
-    const LINE_WIDTH_RATIO = 0.65;
+    const COLOR_LIGHT = [235, 175, 130];
+    const LINE_THICKNESS = 3;
+    const LINE_WIDTH_RATIO = 0.55;
+    const LINE_OFFSET = 55;
     const SWIPE_FRAMES = 25;
     const FRAME_DELAY = 60;
     
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     
-    function setExample(text) {
-        document.getElementById('numberInput').value = text;
-    }
-    
-    document.getElementById('numberInput').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') generate();
-    });
+    function setExample(text) { document.getElementById('numberInput').value = text; }
+    document.getElementById('numberInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') generate(); });
     
     function convertToEnglish(text) {
-        let result = text;
-        result = result.replace(/\s*Mio\.?\s*/g, 'M ');
-        result = result.replace(/\s*Mrd\.?\s*/g, 'B ');
-        result = result.replace(/(\d),(\d{1,2})(?!\d)/g, '$1.$2');
-        return result.trim();
+        return text.replace(/\s*Mio\.?\s*/g, 'M ').replace(/\s*Mrd\.?\s*/g, 'B ').replace(/(\d),(\d{1,2})(?!\d)/g, '$1.$2').trim();
     }
     
     async function generate() {
         const input = document.getElementById('numberInput').value.trim();
         if (!input) return;
-        
         const btn = document.getElementById('generateBtn');
         const status = document.getElementById('status');
         const output = document.getElementById('output');
-        
         btn.disabled = true;
         output.classList.remove('show');
         status.textContent = 'Generiere GIFs...';
-        
         await new Promise(r => setTimeout(r, 50));
-        
         try {
             const deGif = createGif(input);
-            const enText = convertToEnglish(input);
-            const enGif = createGif(enText);
-            
+            const enGif = createGif(convertToEnglish(input));
             document.getElementById('gifDE').src = deGif;
             document.getElementById('downloadDE').href = deGif;
             document.getElementById('downloadDE').download = `number_${input.replace(/[^a-zA-Z0-9]/g, '_')}_DE.gif`;
-            
             document.getElementById('gifEN').src = enGif;
             document.getElementById('downloadEN').href = enGif;
             document.getElementById('downloadEN').download = `number_${input.replace(/[^a-zA-Z0-9]/g, '_')}_EN.gif`;
-            
             status.textContent = '';
             output.classList.add('show');
-            
-        } catch (err) {
-            status.textContent = 'Fehler: ' + err.message;
-            console.error(err);
-        }
-        
+        } catch (err) { status.textContent = 'Fehler: ' + err.message; }
         btn.disabled = false;
     }
     
     function createGif(text) {
         const encoder = new GIFEncoder(WIDTH, HEIGHT);
-        
         ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
-        const textMetrics = ctx.measureText(text);
-        const textWidth = textMetrics.width;
+        const textWidth = ctx.measureText(text).width;
         const textX = (WIDTH - textWidth) / 2;
-        const textY = HEIGHT / 2 + 30;
-        
+        const textY = HEIGHT / 2 + 10;
         const lineWidth = Math.floor(WIDTH * LINE_WIDTH_RATIO);
         const lineStartX = Math.floor((WIDTH - lineWidth) / 2);
-        const lineY = Math.floor(textY + 35);
+        const lineY = Math.floor(textY + LINE_OFFSET);
         
         for (let frame = 0; frame < SWIPE_FRAMES; frame++) {
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
-            
             ctx.fillStyle = COLOR;
             ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
             ctx.textBaseline = 'middle';
@@ -413,24 +324,18 @@
             
             const progress = frame / (SWIPE_FRAMES - 1);
             const gradient = ctx.createLinearGradient(lineStartX, 0, lineStartX + lineWidth, 0);
-            
-            const swipePos = progress;
             const spread = 0.15;
-            
             gradient.addColorStop(0, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-            gradient.addColorStop(Math.max(0, swipePos - spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-            gradient.addColorStop(Math.min(1, swipePos), `rgb(${COLOR_LIGHT[0]},${COLOR_LIGHT[1]},${COLOR_LIGHT[2]})`);
-            gradient.addColorStop(Math.min(1, swipePos + spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(Math.max(0, progress - spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(Math.min(1, progress), `rgb(${COLOR_LIGHT[0]},${COLOR_LIGHT[1]},${COLOR_LIGHT[2]})`);
+            gradient.addColorStop(Math.min(1, progress + spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
             gradient.addColorStop(1, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-            
             ctx.fillStyle = gradient;
             ctx.fillRect(lineStartX, lineY - LINE_THICKNESS / 2, lineWidth, LINE_THICKNESS);
-            
             encoder.addFrame(ctx, FRAME_DELAY);
         }
         
-        const gifData = encoder.encode();
-        const blob = new Blob([gifData], { type: 'image/gif' });
+        const blob = new Blob([encoder.encode()], { type: 'image/gif' });
         return URL.createObjectURL(blob);
     }
     </script>
