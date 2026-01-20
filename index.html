@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Number of the Day - GIF Generator</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #D26C13; margin-bottom: 8px; }
+        .subtitle { color: #666; margin-bottom: 32px; }
+        .input-group { display: flex; gap: 12px; margin-bottom: 24px; }
+        input[type="text"] {
+            flex: 1;
+            padding: 14px 18px;
+            font-size: 18px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            outline: none;
+        }
+        input[type="text"]:focus { border-color: #D26C13; }
+        button {
+            padding: 14px 28px;
+            font-size: 16px;
+            font-weight: 600;
+            background: #D26C13;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        button:hover { background: #b55a0f; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .examples { margin-bottom: 32px; color: #666; }
+        .examples code {
+            background: #e8e8e8;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .examples code:hover { background: #ddd; }
+        .output { display: none; gap: 24px; margin-top: 32px; }
+        .output.show { display: flex; flex-wrap: wrap; }
+        .gif-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            flex: 1;
+            min-width: 280px;
+        }
+        .gif-card h3 { margin: 0 0 12px 0; color: #333; }
+        .gif-card img {
+            width: 100%;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            min-height: 80px;
+            background: #fafafa;
+        }
+        .gif-card a {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #D26C13;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+        }
+        .gif-card a:hover { background: #b55a0f; }
+        .status { text-align: center; padding: 20px; color: #666; }
+        .progress { 
+            width: 100%; 
+            height: 4px; 
+            background: #e0e0e0; 
+            border-radius: 2px; 
+            margin-top: 10px;
+            display: none;
+        }
+        .progress.show { display: block; }
+        .progress-bar {
+            height: 100%;
+            background: #D26C13;
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.2s;
+        }
+        canvas { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Number of the Day</h1>
+    <p class="subtitle">GIF Generator für DE + EN Versionen</p>
+    
+    <div class="input-group">
+        <input type="text" id="numberInput" placeholder="Zahl eingeben, z.B. 1,5 Mio." autofocus>
+        <button id="generateBtn" onclick="generate()">Generieren</button>
+    </div>
+    
+    <div class="examples">
+        Beispiele: 
+        <code onclick="setExample('7')">7</code>
+        <code onclick="setExample('1,5 Mio.')">1,5 Mio.</code>
+        <code onclick="setExample('20%')">20%</code>
+        <code onclick="setExample('500 Mio. US$')">500 Mio. US$</code>
+    </div>
+    
+    <div id="status" class="status"></div>
+    <div id="progress" class="progress"><div id="progressBar" class="progress-bar"></div></div>
+    
+    <div id="output" class="output">
+        <div class="gif-card">
+            <h3>🇩🇪 Deutsch</h3>
+            <img id="gifDE" src="" alt="DE Version">
+            <a id="downloadDE" download="number_of_day_DE.gif">Download DE</a>
+        </div>
+        <div class="gif-card">
+            <h3>🇬🇧 English</h3>
+            <img id="gifEN" src="" alt="EN Version">
+            <a id="downloadEN" download="number_of_day_EN.gif">Download EN</a>
+        </div>
+    </div>
+    
+    <canvas id="canvas" width="1116" height="264"></canvas>
+    
+    <!-- GIF.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+    
+    <script>
+    // Configuration
+    const WIDTH = 1116;
+    const HEIGHT = 264;
+    const COLOR = '#D26C13';
+    const COLOR_DARK = [210, 108, 19];
+    const COLOR_LIGHT = [230, 160, 100];
+    const LINE_THICKNESS = 6;
+    const LINE_WIDTH_RATIO = 0.65;
+    const SWIPE_FRAMES = 25;
+    const FRAME_DELAY = 60;
+    
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    function setExample(text) {
+        document.getElementById('numberInput').value = text;
+    }
+    
+    document.getElementById('numberInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') generate();
+    });
+    
+    function convertToEnglish(text) {
+        let result = text;
+        result = result.replace(/\s*Mio\.?\s*/g, 'M ');
+        result = result.replace(/\s*Mrd\.?\s*/g, 'B ');
+        result = result.replace(/(\d),(\d{1,2})(?!\d)/g, '$1.$2');
+        return result.trim();
+    }
+    
+    function updateProgress(pct) {
+        document.getElementById('progressBar').style.width = pct + '%';
+    }
+    
+    async function generate() {
+        const input = document.getElementById('numberInput').value.trim();
+        if (!input) return;
+        
+        const btn = document.getElementById('generateBtn');
+        const status = document.getElementById('status');
+        const progress = document.getElementById('progress');
+        const output = document.getElementById('output');
+        
+        btn.disabled = true;
+        output.classList.remove('show');
+        progress.classList.add('show');
+        updateProgress(0);
+        status.textContent = 'Generiere DE Version...';
+        
+        try {
+            const deGif = await createGif(input, (p) => updateProgress(p * 45));
+            updateProgress(50);
+            
+            status.textContent = 'Generiere EN Version...';
+            const enText = convertToEnglish(input);
+            const enGif = await createGif(enText, (p) => updateProgress(50 + p * 45));
+            updateProgress(100);
+            
+            document.getElementById('gifDE').src = deGif;
+            document.getElementById('downloadDE').href = deGif;
+            document.getElementById('downloadDE').download = `number_${input.replace(/[^a-zA-Z0-9]/g, '_')}_DE.gif`;
+            
+            document.getElementById('gifEN').src = enGif;
+            document.getElementById('downloadEN').href = enGif;
+            document.getElementById('downloadEN').download = `number_${input.replace(/[^a-zA-Z0-9]/g, '_')}_EN.gif`;
+            
+            status.textContent = '';
+            progress.classList.remove('show');
+            output.classList.add('show');
+            
+        } catch (err) {
+            status.textContent = 'Fehler: ' + err.message;
+            progress.classList.remove('show');
+            console.error(err);
+        }
+        
+        btn.disabled = false;
+    }
+    
+    function createGif(text, onProgress) {
+        return new Promise((resolve, reject) => {
+            const gif = new GIF({
+                workers: 2,
+                quality: 1,
+                width: WIDTH,
+                height: HEIGHT,
+                workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
+            });
+            
+            // Measure text
+            ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
+            const textMetrics = ctx.measureText(text);
+            const textWidth = textMetrics.width;
+            const textX = (WIDTH - textWidth) / 2;
+            const textY = HEIGHT / 2 + 30;
+            
+            const lineWidth = Math.floor(WIDTH * LINE_WIDTH_RATIO);
+            const lineStartX = Math.floor((WIDTH - lineWidth) / 2);
+            const lineY = Math.floor(textY + 35);
+            
+            // Generate frames
+            for (let frame = 0; frame < SWIPE_FRAMES; frame++) {
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                
+                ctx.fillStyle = COLOR;
+                ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, textX, textY);
+                
+                // Draw gradient line
+                const progress = frame / (SWIPE_FRAMES - 1);
+                const gradient = ctx.createLinearGradient(lineStartX, 0, lineStartX + lineWidth, 0);
+                
+                const swipePos = progress;
+                const spread = 0.15;
+                
+                gradient.addColorStop(0, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+                gradient.addColorStop(Math.max(0, swipePos - spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+                gradient.addColorStop(Math.min(1, swipePos), `rgb(${COLOR_LIGHT[0]},${COLOR_LIGHT[1]},${COLOR_LIGHT[2]})`);
+                gradient.addColorStop(Math.min(1, swipePos + spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+                gradient.addColorStop(1, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+                
+                ctx.fillStyle = gradient;
+                ctx.fillRect(lineStartX, lineY - LINE_THICKNESS / 2, lineWidth, LINE_THICKNESS);
+                
+                gif.addFrame(ctx, {copy: true, delay: FRAME_DELAY});
+            }
+            
+            gif.on('progress', (p) => onProgress && onProgress(p));
+            
+            gif.on('finished', (blob) => {
+                resolve(URL.createObjectURL(blob));
+            });
+            
+            gif.on('error', reject);
+            gif.render();
+        });
+    }
+    </script>
+</body>
+</html>
