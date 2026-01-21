@@ -260,14 +260,17 @@
     }
     
     const WIDTH = 1116, HEIGHT = 264;
-    const COLOR = '#D26C13';
-    const COLOR_DARK = [210, 108, 19];
-    const COLOR_LIGHT = [235, 175, 130];
-    const LINE_THICKNESS = 3;
+    const LINE_THICKNESS = 18;  // Viel dicker!
     const LINE_WIDTH_RATIO = 0.55;
     const LINE_OFFSET = 75;
     const SWIPE_FRAMES = 25;
     const FRAME_DELAY = 60;
+    
+    // Farben angepasst ans Beispiel
+    const COLOR_TEXT_TOP = [198, 91, 8];      // Oben dunkler
+    const COLOR_TEXT_BOTTOM = [227, 121, 23]; // Unten heller
+    const COLOR_LINE_BASE = [213, 128, 60];   // Helleres Orange für Linie
+    const COLOR_LINE_GLOW = [245, 180, 120];  // Heller Glow-Effekt
     
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -312,7 +315,9 @@
     
     function createGif(text) {
         const encoder = new GIFEncoder(WIDTH, HEIGHT);
-        ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
+        
+        // Dickere, rundere Schrift
+        ctx.font = '900 120px Arial Black, Arial, sans-serif';
         const textWidth = ctx.measureText(text).width;
         const textX = (WIDTH - textWidth) / 2;
         const textY = HEIGHT / 2 - 20;
@@ -323,21 +328,31 @@
         for (let frame = 0; frame < SWIPE_FRAMES; frame++) {
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
-            ctx.fillStyle = COLOR;
-            ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
+            
+            // Text mit vertikalem Gradient (oben dunkler, unten heller)
+            const textGradient = ctx.createLinearGradient(0, textY - 60, 0, textY + 60);
+            textGradient.addColorStop(0, `rgb(${COLOR_TEXT_TOP[0]},${COLOR_TEXT_TOP[1]},${COLOR_TEXT_TOP[2]})`);
+            textGradient.addColorStop(1, `rgb(${COLOR_TEXT_BOTTOM[0]},${COLOR_TEXT_BOTTOM[1]},${COLOR_TEXT_BOTTOM[2]})`);
+            
+            ctx.fillStyle = textGradient;
+            ctx.font = '900 120px Arial Black, Arial, sans-serif';
             ctx.textBaseline = 'middle';
             ctx.fillText(text, textX, textY);
             
+            // Dickere Linie mit Swipe-Effekt
             const progress = frame / (SWIPE_FRAMES - 1);
-            const gradient = ctx.createLinearGradient(lineStartX, 0, lineStartX + lineWidth, 0);
+            const lineGradient = ctx.createLinearGradient(lineStartX, 0, lineStartX + lineWidth, 0);
             const spread = 0.15;
-            gradient.addColorStop(0, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-            gradient.addColorStop(Math.max(0, progress - spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-            gradient.addColorStop(Math.min(1, progress), `rgb(${COLOR_LIGHT[0]},${COLOR_LIGHT[1]},${COLOR_LIGHT[2]})`);
-            gradient.addColorStop(Math.min(1, progress + spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-            gradient.addColorStop(1, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
-            ctx.fillStyle = gradient;
+            
+            lineGradient.addColorStop(0, `rgb(${COLOR_LINE_BASE[0]},${COLOR_LINE_BASE[1]},${COLOR_LINE_BASE[2]})`);
+            lineGradient.addColorStop(Math.max(0, progress - spread), `rgb(${COLOR_LINE_BASE[0]},${COLOR_LINE_BASE[1]},${COLOR_LINE_BASE[2]})`);
+            lineGradient.addColorStop(Math.min(1, progress), `rgb(${COLOR_LINE_GLOW[0]},${COLOR_LINE_GLOW[1]},${COLOR_LINE_GLOW[2]})`);
+            lineGradient.addColorStop(Math.min(1, progress + spread), `rgb(${COLOR_LINE_BASE[0]},${COLOR_LINE_BASE[1]},${COLOR_LINE_BASE[2]})`);
+            lineGradient.addColorStop(1, `rgb(${COLOR_LINE_BASE[0]},${COLOR_LINE_BASE[1]},${COLOR_LINE_BASE[2]})`);
+            
+            ctx.fillStyle = lineGradient;
             ctx.fillRect(lineStartX, lineY - LINE_THICKNESS / 2, lineWidth, LINE_THICKNESS);
+            
             encoder.addFrame(ctx, FRAME_DELAY);
         }
         
