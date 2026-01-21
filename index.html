@@ -55,4 +55,295 @@
             flex: 1;
             min-width: 280px;
         }
-        .gif-card h3 { margin: 0 0 12px 0; co
+        .gif-card h3 { margin: 0 0 12px 0; color: #333; }
+        .gif-card img {
+            width: 100%;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            min-height: 80px;
+            background: #fafafa;
+        }
+        .gif-card a {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #D26C13;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+        }
+        .gif-card a:hover { background: #b55a0f; }
+        .status { text-align: center; padding: 20px; color: #666; }
+        canvas { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Number of the Day</h1>
+    <p class="subtitle">GIF Generator für DE + EN Versionen</p>
+    
+    <div class="input-group">
+        <input type="text" id="numberInput" placeholder="Zahl eingeben, z.B. 1,5 Mio." autofocus>
+        <button id="generateBtn" onclick="generate()">Generieren</button>
+    </div>
+    
+    <div class="examples">
+        Beispiele: 
+        <code onclick="setExample('7')">7</code>
+        <code onclick="setExample('1,5 Mio.')">1,5 Mio.</code>
+        <code onclick="setExample('20%')">20%</code>
+        <code onclick="setExample('5.000 USD')">5.000 USD</code>
+    </div>
+    
+    <div id="status" class="status"></div>
+    
+    <div id="output" class="output">
+        <div class="gif-card">
+            <h3>🇩🇪 Deutsch</h3>
+            <img id="gifDE" src="" alt="DE Version">
+            <a id="downloadDE" download="number_of_day_DE.gif">Download DE</a>
+        </div>
+        <div class="gif-card">
+            <h3>🇬🇧 English</h3>
+            <img id="gifEN" src="" alt="EN Version">
+            <a id="downloadEN" download="number_of_day_EN.gif">Download EN</a>
+        </div>
+    </div>
+    
+    <canvas id="canvas" width="1116" height="264"></canvas>
+    
+    <script>
+    class GIFEncoder {
+        constructor(width, height) {
+            this.width = width;
+            this.height = height;
+            this.frames = [];
+            this.delays = [];
+        }
+        
+        addFrame(ctx, delay = 100) {
+            const imageData = ctx.getImageData(0, 0, this.width, this.height);
+            this.frames.push(imageData.data);
+            this.delays.push(delay);
+        }
+        
+        encode() {
+            const width = this.width;
+            const height = this.height;
+            const palette = this.buildPalette(this.frames[0]);
+            const colorTab = palette.colors;
+            const colorMap = palette.map;
+            const stream = [];
+            
+            this.writeString(stream, 'GIF89a');
+            this.writeShort(stream, width);
+            this.writeShort(stream, height);
+            stream.push(0xF7, 0, 0);
+            
+            for (let i = 0; i < 256; i++) {
+                if (i < colorTab.length / 3) {
+                    stream.push(colorTab[i * 3], colorTab[i * 3 + 1], colorTab[i * 3 + 2]);
+                } else {
+                    stream.push(0, 0, 0);
+                }
+            }
+            
+            stream.push(0x21, 0xFF, 0x0B);
+            this.writeString(stream, 'NETSCAPE2.0');
+            stream.push(0x03, 0x01, 0x00, 0x00, 0x00);
+            
+            for (let i = 0; i < this.frames.length; i++) {
+                const frameData = this.frames[i];
+                const delay = Math.round(this.delays[i] / 10);
+                
+                stream.push(0x21, 0xF9, 0x04, 0x00);
+                this.writeShort(stream, delay);
+                stream.push(0x00, 0x00);
+                
+                stream.push(0x2C);
+                this.writeShort(stream, 0);
+                this.writeShort(stream, 0);
+                this.writeShort(stream, width);
+                this.writeShort(stream, height);
+                stream.push(0x00);
+                
+                const indexedPixels = this.quantize(frameData, colorMap);
+                const lzw = this.lzwEncode(indexedPixels);
+                stream.push(8);
+                
+                let pos = 0;
+                while (pos < lzw.length) {
+                    const size = Math.min(255, lzw.length - pos);
+                    stream.push(size);
+                    for (let j = 0; j < size; j++) stream.push(lzw[pos++]);
+                }
+                stream.push(0x00);
+            }
+            
+            stream.push(0x3B);
+            return new Uint8Array(stream);
+        }
+        
+        buildPalette(pixels) {
+            const colorCounts = new Map();
+            const numPixels = pixels.length / 4;
+            for (let i = 0; i < numPixels; i++) {
+                const r = pixels[i * 4] & 0xF8;
+                const g = pixels[i * 4 + 1] & 0xF8;
+                const b = pixels[i * 4 + 2] & 0xF8;
+                const key = (r << 16) | (g << 8) | b;
+                colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
+            }
+            const sorted = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 256);
+            const colors = [], map = new Map();
+            for (let i = 0; i < sorted.length; i++) {
+                const key = sorted[i][0];
+                colors.push((key >> 16) & 0xFF, (key >> 8) & 0xFF, key & 0xFF);
+                map.set(key, i);
+            }
+            while (colors.length < 768) colors.push(0, 0, 0);
+            return { colors, map };
+        }
+        
+        quantize(pixels, colorMap) {
+            const numPixels = pixels.length / 4;
+            const indexed = new Uint8Array(numPixels);
+            for (let i = 0; i < numPixels; i++) {
+                const r = pixels[i * 4] & 0xF8;
+                const g = pixels[i * 4 + 1] & 0xF8;
+                const b = pixels[i * 4 + 2] & 0xF8;
+                indexed[i] = colorMap.get((r << 16) | (g << 8) | b) || 0;
+            }
+            return indexed;
+        }
+        
+        lzwEncode(pixels) {
+            const clearCode = 256, eoiCode = 257;
+            let codeSize = 9, nextCode = 258;
+            const output = [];
+            let bitBuffer = 0, bitCount = 0;
+            const emit = (code) => {
+                bitBuffer |= code << bitCount;
+                bitCount += codeSize;
+                while (bitCount >= 8) { output.push(bitBuffer & 0xFF); bitBuffer >>= 8; bitCount -= 8; }
+            };
+            let dict = new Map();
+            const resetDict = () => {
+                dict = new Map();
+                for (let i = 0; i < 256; i++) dict.set(String.fromCharCode(i), i);
+                nextCode = 258; codeSize = 9;
+            };
+            resetDict();
+            emit(clearCode);
+            let current = String.fromCharCode(pixels[0]);
+            for (let i = 1; i < pixels.length; i++) {
+                const next = String.fromCharCode(pixels[i]);
+                const combined = current + next;
+                if (dict.has(combined)) { current = combined; }
+                else {
+                    emit(dict.get(current));
+                    if (nextCode < 4096) {
+                        dict.set(combined, nextCode++);
+                        if (nextCode > (1 << codeSize) && codeSize < 12) codeSize++;
+                    } else { emit(clearCode); resetDict(); }
+                    current = next;
+                }
+            }
+            emit(dict.get(current));
+            emit(eoiCode);
+            if (bitCount > 0) output.push(bitBuffer & 0xFF);
+            return output;
+        }
+        
+        writeString(stream, str) { for (let i = 0; i < str.length; i++) stream.push(str.charCodeAt(i)); }
+        writeShort(stream, val) { stream.push(val & 0xFF, (val >> 8) & 0xFF); }
+    }
+    
+    const WIDTH = 1116, HEIGHT = 264;
+    const COLOR = '#D26C13';
+    const COLOR_DARK = [210, 108, 19];
+    const COLOR_LIGHT = [235, 175, 130];
+    const LINE_THICKNESS = 3;
+    const LINE_WIDTH_RATIO = 0.55;
+    const LINE_OFFSET = 75;
+    const SWIPE_FRAMES = 25;
+    const FRAME_DELAY = 60;
+    
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    function setExample(text) { document.getElementById('numberInput').value = text; }
+    document.getElementById('numberInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') generate(); });
+    
+    function convertToEnglish(text) {
+        let result = text;
+        result = result.replace(/\.(\d{3})(?!\d)/g, 'THOUSAND$1');
+        result = result.replace(/,(\d{1,2})(?!\d)/g, '.$1');
+        result = result.replace(/THOUSAND/g, ',');
+        result = result.replace(/\s*Mio\.?\s*/g, 'M ');
+        result = result.replace(/\s*Mrd\.?\s*/g, 'B ');
+        return result.trim();
+    }
+    
+    async function generate() {
+        const input = document.getElementById('numberInput').value.trim();
+        if (!input) return;
+        const btn = document.getElementById('generateBtn');
+        const status = document.getElementById('status');
+        const output = document.getElementById('output');
+        btn.disabled = true;
+        output.classList.remove('show');
+        status.textContent = 'Generiere GIFs...';
+        await new Promise(r => setTimeout(r, 50));
+        try {
+            const deGif = createGif(input);
+            const enGif = createGif(convertToEnglish(input));
+            document.getElementById('gifDE').src = deGif;
+            document.getElementById('downloadDE').href = deGif;
+            document.getElementById('downloadDE').download = `number_${input.replace(/[^a-zA-Z0-9]/g, '_')}_DE.gif`;
+            document.getElementById('gifEN').src = enGif;
+            document.getElementById('downloadEN').href = enGif;
+            document.getElementById('downloadEN').download = `number_${input.replace(/[^a-zA-Z0-9]/g, '_')}_EN.gif`;
+            status.textContent = '';
+            output.classList.add('show');
+        } catch (err) { status.textContent = 'Fehler: ' + err.message; }
+        btn.disabled = false;
+    }
+    
+    function createGif(text) {
+        const encoder = new GIFEncoder(WIDTH, HEIGHT);
+        ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
+        const textWidth = ctx.measureText(text).width;
+        const textX = (WIDTH - textWidth) / 2;
+        const textY = HEIGHT / 2 - 20;
+        const lineWidth = Math.floor(WIDTH * LINE_WIDTH_RATIO);
+        const lineStartX = Math.floor((WIDTH - lineWidth) / 2);
+        const lineY = Math.floor(textY + LINE_OFFSET);
+        
+        for (let frame = 0; frame < SWIPE_FRAMES; frame++) {
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+            ctx.fillStyle = COLOR;
+            ctx.font = 'bold 120px Helvetica, Arial, sans-serif';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, textX, textY);
+            
+            const progress = frame / (SWIPE_FRAMES - 1);
+            const gradient = ctx.createLinearGradient(lineStartX, 0, lineStartX + lineWidth, 0);
+            const spread = 0.15;
+            gradient.addColorStop(0, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(Math.max(0, progress - spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(Math.min(1, progress), `rgb(${COLOR_LIGHT[0]},${COLOR_LIGHT[1]},${COLOR_LIGHT[2]})`);
+            gradient.addColorStop(Math.min(1, progress + spread), `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            gradient.addColorStop(1, `rgb(${COLOR_DARK[0]},${COLOR_DARK[1]},${COLOR_DARK[2]})`);
+            ctx.fillStyle = gradient;
+            ctx.fillRect(lineStartX, lineY - LINE_THICKNESS / 2, lineWidth, LINE_THICKNESS);
+            encoder.addFrame(ctx, FRAME_DELAY);
+        }
+        
+        const blob = new Blob([encoder.encode()], { type: 'image/gif' });
+        return URL.createObjectURL(blob);
+    }
+    </script>
+</body>
+</html>
